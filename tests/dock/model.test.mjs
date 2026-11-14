@@ -6,6 +6,13 @@ import { indexWindowRecords } from "../../shell/desktop/modules/dock/WindowRecor
 import { toArray } from "../../shell/desktop/modules/dock/PayloadArray.mjs";
 import { indexAt, parse } from "../../shell/desktop/modules/common/TimedLyrics.mjs";
 import { nextWindowToActivate, pendingWindowIdFor } from "../../shell/desktop/modules/dock/WindowCycle.mjs";
+import { computeLayout, separatorSlotWidth } from "../../shell/desktop/modules/dock/AdaptiveMath.mjs";
+import { layout } from "../../shell/desktop/modules/dock/DockMagnification.mjs";
+import {
+    DOCK_CONFIG_VERSION, addSeparatorAfter, moveDockItem, normalizeDockItems,
+    removeSeparator, separatorDragReleasedOutside, visibleDockItems,
+} from "../../shell/desktop/modules/dock/DockItems.mjs";
+import { catalog as zhCatalog } from "../../shared/qml/i18n/ZhCatalog.mjs";
 import { test } from "node:test";
 
 test("process identity", async () => {
@@ -582,4 +589,150 @@ test("window cycle: facade clears acknowledged requests before focus returns", (
     service.windowById = () => null;
     context._syncPendingCycle();
     assert.equal(svc._pendingCycleWindowId, "", "closing the target clears pending state");
+});
+
+test("dock separators", () => {
+    assert.equal(DOCK_CONFIG_VERSION, 13);
+
+    const config = readFileSync(new URL("../../shell/desktop/modules/dock/DockConfigService.qml", import.meta.url), "utf8");
+    const model = readFileSync(new URL("../../shell/desktop/modules/dock/DockModelService.qml", import.meta.url), "utf8");
+    const container = readFileSync(new URL("../../shell/desktop/modules/dock/DockContainer.qml", import.meta.url), "utf8");
+    const icon = readFileSync(new URL("../../shell/desktop/modules/dock/DockIcon.qml", import.meta.url), "utf8");
+    assert.match(config, /DockItems\.normalizeDockItems/);
+    assert.match(config, /version:\s*DockItems\.DOCK_CONFIG_VERSION/);
+    assert.match(model, /visibleDockItems/);
+    assert.match(model, /function addSeparatorAfter/);
+    assert.match(model, /function removeSeparator/);
+    assert.match(container, /separatorDragReleasedOutside/);
+    assert.match(container, /I18n\.tr\("Remove separator"\)/);
+    assert.match(icon, /I18n\.tr\("Add separator to the right"\)/);
+    assert.equal(zhCatalog["Add separator to the right"], "在右侧添加分隔线");
+    assert.equal(zhCatalog["Remove separator"], "移除分隔线");
+
+    // Persistence. Unknown types drop, folders flatten, apps are never lost,
+    // and separators survive a save/load round trip — including ones that
+    // would be hidden on screen.
+    let minted = 0;
+    const stored = normalizeDockItems([
+        { type: "separator", id: "lead" },
+        { type: "app", appId: "org.kde.dolphin.desktop" },
+        { type: "separator", id: "mid" },
+        { type: "separator", id: "mid" },
+        { type: "folder", id: "legacy", appIds: ["org.kde.kate.desktop", "org.kde.dolphin.desktop"] },
+        { type: "widget", id: "drop-me" },
+        { type: "app", appId: "org.kde.konsole.desktop" },
+        { type: "separator" },
+    ], () => "mint-" + (++minted));
+    assert.deepEqual(stored, [
+        { type: "separator", id: "lead" },
+        { type: "app", appId: "org.kde.dolphin.desktop" },
+        { type: "separator", id: "mid" },
+        { type: "separator", id: "mint-1" },
+        { type: "app", appId: "org.kde.kate.desktop" },
+        { type: "app", appId: "org.kde.konsole.desktop" },
+        { type: "separator", id: "mint-2" },
+    ]);
+    const saved = JSON.parse(JSON.stringify({
+        version: DOCK_CONFIG_VERSION,
+        dockItems: stored,
+        pinnedAppIds: stored.filter(item => item.type === "app").map(item => item.appId),
+    }));
+    const loaded = normalizeDockItems(saved.dockItems, () => {
+        throw new Error("stable separators must not be reissued");
+    });
+    assert.deepEqual(loaded, stored);
+    assert.deepEqual(saved.pinnedAppIds, [
+        "org.kde.dolphin.desktop", "org.kde.kate.desktop", "org.kde.konsole.desktop",
+    ]);
+    // An older app-only list is unchanged and does not grow a separator.
+    const legacy = [{ type: "app", appId: "org.kde.kate.desktop" }];
+    assert.deepEqual(normalizeDockItems(legacy, () => {
+        throw new Error("apps do not need a separator id");
+    }), legacy);
+
+    // Display filter: leading, trailing, consecutive, and orphaned after a
+    // neighbour disappears. The stored array is not rewritten.
+    const raw = [
+        { type: "separator", id: "lead" },
+        { type: "separator", id: "lead-2" },
+        { type: "app", appId: "a" },
+        { type: "separator", id: "s1" },
+        { type: "separator", id: "s2" },
+        { type: "app", appId: "b" },
+        { type: "separator", id: "trail" },
+    ];
+    const snapshot = JSON.parse(JSON.stringify(raw));
+    assert.deepEqual(visibleDockItems(raw).map(item => item.id || item.appId),
+        ["a", "s1", "b"]);
+    assert.deepEqual(raw, snapshot);
+
+    const withoutB = raw.filter(item => item.appId !== "b");
+    assert.deepEqual(visibleDockItems(withoutB).map(item => item.id || item.appId), ["a"]);
+    assert.equal(withoutB.filter(item => item.type === "separator").length, 5);
+    assert.deepEqual(visibleDockItems(raw.filter(item => item.type === "separator")), []);
+    // Separate mode hides a running pinned app; the separators beside it go too.
+    assert.deepEqual(
+        visibleDockItems(raw, item => item.appId !== "b").map(item => item.id || item.appId),
+        ["a"]);
+
+    // Add, move, remove. Inputs stay put; apps stay when a separator moves.
+    const apps = [
+        { type: "app", appId: "a" },
+        { type: "app", appId: "b" },
+    ];
+    const added = addSeparatorAfter(apps, "a", "s");
+    assert.deepEqual(added.map(item => item.id || item.appId), ["a", "s", "b"]);
+    assert.equal(apps.length, 2);
+    assert.equal(addSeparatorAfter(apps, "missing", "s"), null);
+    const sameApp = (left, right) =>
+        (left === "code.desktop" && right === "Code") || left === right;
+    assert.deepEqual(
+        addSeparatorAfter([{ type: "app", appId: "code.desktop" }], "Code", "s", sameApp)
+            .map(item => item.id || item.appId),
+        ["code.desktop", "s"]);
+
+    const moved = moveDockItem(added, "separator", "s", 0);
+    assert.deepEqual(moved.map(item => item.id || item.appId), ["s", "a", "b"]);
+    const movedApp = moveDockItem(added, "app", "b", 0);
+    assert.deepEqual(movedApp.map(item => item.id || item.appId), ["b", "a", "s"]);
+    assert.deepEqual(removeSeparator(added, "s"), apps);
+    assert.equal(removeSeparator(added, "missing"), null);
+    assert.equal(moveDockItem(added, "separator", "missing", 0), null);
+    assert.equal(moveDockItem(added, "separator", "s", 1), null);
+
+    assert.equal(separatorDragReleasedOutside(31, 60), true);
+    assert.equal(separatorDragReleasedOutside(-31, 60), true);
+    assert.equal(separatorDragReleasedOutside(30, 60), false);
+    assert.equal(separatorDragReleasedOutside(NaN, 60), false);
+    assert.equal(separatorDragReleasedOutside(10, 0), false);
+
+    // Layout width. Two separators add a row gap plus a 2×spacing slot each.
+    const proportions = { spacing: 0.1, vpad: 0.2, hpad: 0.4, divmargin: 0.2 };
+    const plain = computeLayout(60, 3, 0, false, 1920, proportions);
+    const withSeps = computeLayout(60, 3, 0, false, 1920, proportions, 0.98, 4, false, 2);
+    assert.equal(withSeps.separatorCount, 2);
+    assert.equal(withSeps.iconSize, plain.iconSize);
+    const perSeparator = plain.iconSize * 0.1 * 3;
+    assert.ok(Math.abs(withSeps.dockWidth - plain.dockWidth - perSeparator * 2) < 1e-6,
+        `width delta ${withSeps.dockWidth - plain.dockWidth} != ${perSeparator * 2}`);
+    assert.equal(separatorSlotWidth(plain.itemSpacing), plain.itemSpacing * 2);
+    assert.equal(separatorSlotWidth(0), 0);
+    const crowded = computeLayout(60, 30, 30, true, 800, proportions, 0.98, 4, false, 8);
+    const crowdedPlain = computeLayout(60, 30, 30, true, 800, proportions);
+    assert.ok(crowded.dockWidth <= 800 * 0.98 + 1);
+    assert.ok(crowded.iconSize <= crowdedPlain.iconSize);
+    assert.ok(crowded.iconSize > 0);
+
+    // Fisheye: the separator translates and keeps its resting width.
+    const states = [
+        { item: "a", cx: 0, half: 22, artHalf: 18, growable: true },
+        { item: "sep", cx: 60, half: 4, growable: false, separatorSlot: true },
+        { item: "b", cx: 120, half: 22, artHalf: 18, growable: true },
+    ];
+    const frame = layout(states, 0, 1, 2.5, 180, 4);
+    const sep = frame.byItem.get("sep");
+    assert.equal(sep.scale, 1);
+    assert.equal(sep.half, 4);
+    assert.notEqual(sep.dx, 0);
+    assert.ok(frame.byItem.get("a").scale > 1);
 });
