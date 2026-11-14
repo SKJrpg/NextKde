@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import "../../../shared/qml/i18n"
 import "./AdaptiveMath.mjs" as AdaptiveMath
+import "DockItems.mjs" as DockItems
 import qs.desktop
 import qs.desktop.modules.applauncher
 import qs.desktop.modules.common
@@ -138,13 +139,16 @@ Item {
     // Probe the crowded layout with the carousel included before deciding
     // whether it is safe to show. This avoids a feedback loop where hiding the
     // carousel makes icons larger and immediately makes it reappear.
+    readonly property int separatorCount: DockModelService.separatorCount
     readonly property var _infoProbeLayout: AdaptiveMath.computeLayout(
         baseHeight, pinnedCount, windowCount,
         hasAvailableInfo && !vertical,
         Math.max(baseHeight, availableLength - estimatedAccessoryWidth),
         proportions,
         vertical ? AdaptiveMath.MAX_HEIGHT_RATIO : AdaptiveMath.MAX_WIDTH_RATIO,
-        infoSlotUnits
+        infoSlotUnits,
+        false,
+        separatorCount
     )
     // At the 18px absolute icon floor, the cards cannot keep even compact
     // glyphs legible. Remove the carousel and its divider as one unit, which
@@ -182,7 +186,8 @@ Item {
         proportions,
         vertical ? AdaptiveMath.MAX_HEIGHT_RATIO : AdaptiveMath.MAX_WIDTH_RATIO,
         infoSlotUnits,
-        accessoryCount > 0
+        accessoryCount > 0,
+        separatorCount
     )
 
     readonly property int computedDockHeight: _layout.dockHeight
@@ -308,7 +313,13 @@ Item {
         for (const child of contentRow.children) {
             if (!child || !child.visible || child.width <= 0)
                 continue
-            if (child.iconSlotSize !== undefined) {
+            // User separators translate with the wave and never grow. They
+            // also must not steal the app highlight or end the wave.
+            if (child.separatorSlot === true) {
+                states.push({ item: child, cx: layoutCentre(child),
+                    half: child.width / 2, growable: false,
+                    blocksMagnification: false, separatorSlot: true })
+            } else if (child.iconSlotSize !== undefined) {
                 addIcon(child)
             } else if (child.magnificationItems !== undefined) {
                 for (const item of child.magnificationItems)
@@ -432,7 +443,9 @@ Item {
             const half = entry ? entry.half : state.half
             if (Math.abs(point.x - cx) > half) continue
             if (!state.growable) {
-                if (state.blocksMagnification) return null
+                // A separator owns no highlight. Section dividers and the
+                // distribution spacer keep the previous "keep looking" rule.
+                if (state.blocksMagnification || state.separatorSlot) return null
                 continue
             }
             if (!state.item.interactive) continue
@@ -673,6 +686,45 @@ Item {
         }
     }
 
+    // One menu for every user separator. Separators have no app actions.
+    ContextMenu {
+        id: separatorContextMenu
+        reserveIconSpace: true
+        capsuleReveal: true
+        position: ConfigService.position
+        baseColor: ThemeService.backgroundColor
+        foregroundColor: ThemeService.foregroundColor
+        property string separatorId: ""
+        property bool hasBeenVisible: false
+
+        onAboutToShow: hasBeenVisible = true
+        onAboutToHide: {
+            if (hasBeenVisible) {
+                hasBeenVisible = false
+                if (DockModelService.activeDockPopup === separatorContextMenu)
+                    DockModelService.releaseDockPopup(separatorContextMenu)
+            }
+        }
+
+        onAction: function(cmd) {
+            if (cmd === "remove")
+                DockModelService.removeSeparator(separatorId)
+        }
+    }
+
+    function openSeparatorMenu(slot) {
+        if (!slot || !slot.itemData || slot.itemData.type !== "separator")
+            return
+        separatorContextMenu.anchorItem = slot
+        separatorContextMenu.separatorId = slot.itemData.id || ""
+        separatorContextMenu.setItems([{
+            icon: "dock.menu.separator.remove",
+            label: I18n.tr("Remove separator"),
+            cmd: "remove"
+        }])
+        DockModelService.openDockPopup(separatorContextMenu)
+    }
+
     // The launcher is a shell control, so its mode picker must use the same
     // self-drawn liquid-glass menu as Dock apps and desktop icons. Keeping it
     // as a native Qt/KDE menu made this one right-click entry visually break
@@ -898,10 +950,17 @@ Item {
                 required property var modelData
                 required property int index
                 property var itemData: modelData
-                readonly property var magnificationItems: pinnedIconRow.children
+                readonly property bool isSeparator: itemData.type === "separator"
+                // Marks this row child as a fixed-width magnification slot.
+                readonly property bool separatorSlot: isSeparator
+                readonly property int separatorWidth: AdaptiveMath.separatorSlotWidth(
+                    container.itemSpacing)
+                readonly property var magnificationItems: isSeparator
+                    ? undefined : pinnedIconRow.children
                 property int pinnedIndex: index
                 property bool dragged: false
                 property real lastDragOffsetX: 0
+                property real lastDragOffsetY: 0
                 // The DragHandler clears translation as soon as the pointer is
                 // released. Keep a visual anchor for one layout frame so the
                 // source never flashes back to its old slot before the reordered
@@ -922,12 +981,17 @@ Item {
                             + pinnedItemLoader.width / 2)
                     return 0
                 }
+                readonly property real dragOffsetY: reorderDrag.active
+                    ? reorderDrag.translation.y : 0
                 readonly property real reorderOffsetX: {
                     const source = container.draggedPinnedLoader
                     const destination = container.dragInsertIndex
                     if (!source || source === pinnedItemLoader || destination < 0)
                         return 0
-                    const slotStep = pinnedItemLoader.width + container.itemSpacing
+                    // A separator is narrower than an icon. Neighbours move by
+                    // the dragged slot so the preview gap matches the drop.
+                    const slotStep = (source.isSeparator
+                        ? source.width : pinnedItemLoader.width) + container.itemSpacing
                     if (destination < source.pinnedIndex
                             && pinnedItemLoader.pinnedIndex >= destination
                             && pinnedItemLoader.pinnedIndex < source.pinnedIndex)
@@ -943,17 +1007,24 @@ Item {
                     + container.activeBackgroundGap * 2
                 readonly property int extraWindowCount: itemData.type === "app"
                     ? (itemData.extraWindows?.length ?? 0) : 0
-                width: iconSlotWidth * (1 + extraWindowCount)
+                width: isSeparator ? separatorWidth
+                    : iconSlotWidth * (1 + extraWindowCount)
                     + container.itemSpacing * extraWindowCount
                 // Row places delegates at y=0; keep the delegate dock-height
                 // tall so the nested square icon can remain vertically centred.
                 height: container.computedDockHeight
                 z: reorderDrag.active || settling ? 10 : 0
-                scale: reorderDrag.active || settling ? 1.10 : 1.0
+                // Separators stay a fixed width, including while they are dragged.
+                scale: !isSeparator && (reorderDrag.active || settling) ? 1.10 : 1.0
                 opacity: reorderDrag.active || settling ? 0.88 : 1.0
                 transformOrigin: Item.Center
                 layer.enabled: reorderDrag.active || settling
-                transform: Translate { x: pinnedItemLoader.visualOffsetX }
+                transform: Translate {
+                    x: pinnedItemLoader.visualOffsetX
+                        + (pinnedItemLoader.isSeparator
+                            ? container.spreadFor(pinnedItemLoader) : 0)
+                    y: pinnedItemLoader.dragOffsetY
+                }
                 Behavior on visualOffsetX {
                     // The dragged source follows immediately. Neighbours ease
                     // out of the way as the candidate insertion slot changes;
@@ -976,7 +1047,11 @@ Item {
                     target: null
                     acceptedButtons: Qt.LeftButton
                     xAxis.enabled: true
-                    yAxis.enabled: false
+                    // Icons stay on the dock axis. A separator may also leave
+                    // across the thickness; releasing there removes it.
+                    // contentRow's rotation makes this local axis the
+                    // screen-perpendicular direction on side docks too.
+                    yAxis.enabled: pinnedItemLoader.isSeparator
                     onActiveChanged: {
                         if (active) {
                             // A deliberate drag is an alternate entry point
@@ -988,11 +1063,26 @@ Item {
                             pinnedItemLoader.dragged = true
                             pinnedItemLoader.settling = false
                             pinnedItemLoader.lastDragOffsetX = 0
+                            pinnedItemLoader.lastDragOffsetY = 0
                             container.draggedPinnedLoader = pinnedItemLoader
                             return
                         }
                         if (!pinnedItemLoader.dragged)
                             return
+
+                        if (pinnedItemLoader.isSeparator
+                                && DockItems.separatorDragReleasedOutside(
+                                    pinnedItemLoader.lastDragOffsetY,
+                                    container.computedDockHeight)) {
+                            const removedId = pinnedItemLoader.itemData.id
+                            pinnedItemLoader.settling = false
+                            pinnedItemLoader.dragged = false
+                            if (container.draggedPinnedLoader === pinnedItemLoader)
+                                container.draggedPinnedLoader = null
+                            container.editMode = false
+                            DockModelService.removeSeparator(removedId)
+                            return
+                        }
 
                         // `translation` is measured from this Loader's start
                         // position, so it gives the actual visual centre in
@@ -1021,7 +1111,9 @@ Item {
                         pinnedItemLoader.settling = true
                         DockModelService.movePinnedItem(
                                     pinnedItemLoader.itemData.type,
-                                    pinnedItemLoader.itemData.appId,
+                                    pinnedItemLoader.isSeparator
+                                        ? pinnedItemLoader.itemData.id
+                                        : pinnedItemLoader.itemData.appId,
                                     nearestIndex)
                         settleTimer.restart()
                     }
@@ -1029,8 +1121,31 @@ Item {
                     // before onActiveChanged(false) runs. Keep the final
                     // non-zero value for the release transaction above.
                     onTranslationChanged: {
-                        if (active)
+                        if (active) {
                             pinnedItemLoader.lastDragOffsetX = translation.x
+                            pinnedItemLoader.lastDragOffsetY = translation.y
+                        }
+                    }
+                }
+
+                // Same hairline as the section dividers. The row rotation
+                // turns it horizontal on a side dock; do not counter-rotate.
+                DockDivider {
+                    visible: pinnedItemLoader.isSeparator
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    dockHeight: container.computedDockHeight
+                    dividerWidth: 2
+                    sideMargin: Math.max(0, (pinnedItemLoader.separatorWidth - 2) / 2)
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    visible: pinnedItemLoader.isSeparator
+                    enabled: pinnedItemLoader.isSeparator
+                    acceptedButtons: Qt.RightButton
+                    onClicked: function(mouse) {
+                        if (mouse.button === Qt.RightButton)
+                            container.openSeparatorMenu(pinnedItemLoader)
                     }
                 }
 
@@ -1054,6 +1169,7 @@ Item {
 
                 Row {
                             id: pinnedIconRow
+                            visible: !pinnedItemLoader.isSeparator
                             anchors.centerIn: parent
                             spacing: container.itemSpacing
 
