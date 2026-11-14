@@ -94,7 +94,9 @@ TestCase {
         verify(Math.abs(panel.progress - before) < 0.3)
         compare(panel.state.auxText, "英")
         tryCompare(panel, "progress", 1)
-        compare(panel.scale, 1)
+        // Scale follows the geometry spring, which is still settling when the
+        // linear progress reaches 1. Wait for the panel to reach full scale.
+        tryCompare(panel, "scale", 1)
     }
 
     function test_same_turn_updates_commit_latest_content() {
