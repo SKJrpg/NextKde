@@ -360,6 +360,7 @@ access every individual window.
 ```js
 pinnedItems
 pinnedCount
+separatorCount
 windowModel
 windowCount
 activateApp(appId)
@@ -372,6 +373,8 @@ pinApp(appId)
 isAppPinned(appId)
 isAppActivated(appId)
 unpinApp(appId)
+addSeparatorAfter(appId)
+removeSeparator(id)
 movePinnedItem(type, key, targetIndex)
 ```
 
@@ -496,11 +499,11 @@ application-grid order in Dock configuration.
 File: `Quickshell.stateDir + "/dock/config.json"`. This keeps runtime user
 state outside the watched QML source directory.
 
-Core user configuration fields (schema version 12):
+Core user configuration fields (schema version 13):
 
 ```json
 {
-  "version": 12,
+  "version": 13,
   "baseHeight": 60,
   "theme": "dark",
   "position": "bottom",
@@ -508,6 +511,7 @@ Core user configuration fields (schema version 12):
   "iconOverrides": {},
   "dockItems": [
     { "type": "app", "appId": "org.kde.dolphin.desktop" },
+    { "type": "separator", "id": "sep-dolphin" },
     { "type": "app", "appId": "org.kde.kate.desktop" }
   ],
   "pinnedAppIds": [],
@@ -523,6 +527,21 @@ Core user configuration fields (schema version 12):
   "hoverScale": null
 }
 ```
+
+Schema 13 stores user separators in `dockItems` as
+`{ "type": "separator", "id": "<unique>" }`, in the pinned-app run only.
+Every mutation goes through `setDockItems`. Older files need no migration:
+normalization still drops unknown types, keeps separators, and never removes
+a pinned app to accommodate them. `DockModelService` hides separators that
+lead or trail the pinned run, adjacent duplicates, and separators left
+without a neighbouring pinned app (including after a separate-mode app moves
+into the window section). That filter does not rewrite the saved list. The
+separator reuses `DockDivider` — theme hairline, rotated with `contentRow`,
+so a side dock draws it horizontally. Its slot is one icon spacing plus half
+a spacing on each side; `computeLayout` reserves that width plus the row gap.
+Separators reorder with pinned icons and are removed when dragged out past
+half the dock thickness. They do not magnify, show a name, or take a highlight.
+A pinned app's menu can add one to its right; a separator's menu only removes it.
 
 Schema 12 keeps one `hoverScale` setting: the hovered icon's peak scale
 (1.0–3.0, displayed as 100–300%). Lift is derived as
@@ -709,7 +728,8 @@ left-click behavior is unchanged.
 Current context menu actions call service methods:
 
 ```text
-Pinned App:  activateApp, unpinApp
+Pinned App:  activateApp, unpinApp, addSeparatorAfter
+Separator:   removeSeparator
 Window:      activateWindow, minimizeWindow, closeWindow, pinApp/unpinApp
 ```
 
