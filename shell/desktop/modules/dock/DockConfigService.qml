@@ -496,7 +496,9 @@ QtObject {
         const moved = DockItems.moveDockItem(items, sourceType, sourceKey, targetIndex)
         if (!moved)
             return false
-        const changed = setDockItems(moved)
+        // A drop at either end, or one that squeezes two separators together,
+        // removes the separator from storage instead of leaving a hidden item.
+        const changed = setDockItems(DockItems.compactDockItems(moved))
         if (changed)
             scheduleSave()
         return changed

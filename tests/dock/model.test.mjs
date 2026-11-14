@@ -9,8 +9,9 @@ import { nextWindowToActivate, pendingWindowIdFor } from "../../shell/desktop/mo
 import { computeLayout, separatorSlotWidth } from "../../shell/desktop/modules/dock/AdaptiveMath.mjs";
 import { layout } from "../../shell/desktop/modules/dock/DockMagnification.mjs";
 import {
-    DOCK_CONFIG_VERSION, addSeparatorAfter, moveDockItem, normalizeDockItems,
-    removeSeparator, separatorDragReleasedOutside, visibleDockItems,
+    DOCK_CONFIG_VERSION, addSeparatorAfter, canAddSeparatorAfter, compactDockItems,
+    moveDockItem, normalizeDockItems, removeSeparator, separatorDragReleasedOutside,
+    visibleDockItems,
 } from "../../shell/desktop/modules/dock/DockItems.mjs";
 import { catalog as zhCatalog } from "../../shared/qml/i18n/ZhCatalog.mjs";
 import { test } from "node:test";
@@ -179,16 +180,23 @@ test("unpin identity", async () => {
     const source=readFileSync(new URL("../../shell/desktop/modules/dock/DockModelService.qml", import.meta.url),'utf8');
     const unpin=source.match(/^    function unpinApp\(appId\) \{[^]*?^    \}/m)[0];
     let refreshes=0,saves=0;
-    const config={dockItems:[{type:'app',appId:'code.desktop'},{type:'app',appId:'Code'},
-        {type:'app',appId:'org.kde.dolphin.desktop'},{type:'separator'}],
+    const config={dockItems:[
+        {type:'app',appId:'org.kde.dolphin.desktop'},
+        {type:'separator',id:'keep'},
+        {type:'app',appId:'code.desktop'},
+        {type:'app',appId:'Code'},
+        {type:'app',appId:'org.kde.kate.desktop'},
+        {type:'separator',id:'trail'}],
         setDockItems(items){this.dockItems=items;return true;},scheduleSave(){saves++;}};
     const normalize=id=>['Code','code.desktop','com.microsoft.VSCode.desktop'].includes(id)?'vscode':id;
     const context=vm.createContext({ConfigService:config,
         AppIdentityService:{sameApp:(a,b)=>normalize(a)===normalize(b)},
+        DockItems:{compactDockItems},
         svc:{_refreshPresentation(){refreshes++;}}});
     vm.runInContext(unpin,context);
     context.unpinApp('com.microsoft.VSCode.desktop');
-    assert.deepEqual(Array.from(config.dockItems,x=>x.appId||x.type),['org.kde.dolphin.desktop','separator']);
+    assert.deepEqual(Array.from(config.dockItems,x=>x.appId||x.id),
+        ['org.kde.dolphin.desktop','keep','org.kde.kate.desktop']);
     assert.equal(saves,1);assert.equal(refreshes,1);
     context.unpinApp('missing.desktop');
     assert.equal(saves,1);assert.equal(refreshes,1);
@@ -684,17 +692,37 @@ test("dock separators", () => {
     assert.deepEqual(added.map(item => item.id || item.appId), ["a", "s", "b"]);
     assert.equal(apps.length, 2);
     assert.equal(addSeparatorAfter(apps, "missing", "s"), null);
+    assert.equal(canAddSeparatorAfter(apps, "a"), true);
+    assert.equal(canAddSeparatorAfter(apps, "b"), false);
+    assert.equal(addSeparatorAfter(apps, "b", "end"), null);
+    assert.equal(canAddSeparatorAfter(added, "a"), false);
+    assert.equal(addSeparatorAfter(added, "a", "dup"), null);
+    assert.equal(canAddSeparatorAfter(apps, "a", (left, right) => left === right,
+        item => item.appId !== "b"), false);
     const sameApp = (left, right) =>
         (left === "code.desktop" && right === "Code") || left === right;
     assert.deepEqual(
-        addSeparatorAfter([{ type: "app", appId: "code.desktop" }], "Code", "s", sameApp)
-            .map(item => item.id || item.appId),
-        ["code.desktop", "s"]);
+        addSeparatorAfter([
+            { type: "app", appId: "code.desktop" },
+            { type: "app", appId: "org.kde.dolphin.desktop" },
+        ], "Code", "s", sameApp).map(item => item.id || item.appId),
+        ["code.desktop", "s", "org.kde.dolphin.desktop"]);
 
     const moved = moveDockItem(added, "separator", "s", 0);
     assert.deepEqual(moved.map(item => item.id || item.appId), ["s", "a", "b"]);
+    assert.deepEqual(compactDockItems(moved).map(item => item.id || item.appId), ["a", "b"]);
     const movedApp = moveDockItem(added, "app", "b", 0);
     assert.deepEqual(movedApp.map(item => item.id || item.appId), ["b", "a", "s"]);
+    assert.deepEqual(compactDockItems(movedApp).map(item => item.id || item.appId), ["b", "a"]);
+    const toEnd = moveDockItem(added, "separator", "s", 2);
+    assert.deepEqual(compactDockItems(toEnd).map(item => item.id || item.appId), ["a", "b"]);
+    assert.deepEqual(compactDockItems([
+        { type: "app", appId: "a" },
+        { type: "separator", id: "s1" },
+        { type: "separator", id: "s2" },
+        { type: "app", appId: "b" },
+        { type: "separator", id: "trail" },
+    ]).map(item => item.id || item.appId), ["a", "s1", "b"]);
     assert.deepEqual(removeSeparator(added, "s"), apps);
     assert.equal(removeSeparator(added, "missing"), null);
     assert.equal(moveDockItem(added, "separator", "missing", 0), null);

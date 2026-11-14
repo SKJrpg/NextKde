@@ -546,7 +546,13 @@ QtObject {
         const items = ConfigService.dockItems || [];
         const remaining = items.filter(item => item.type !== "app"
             || !AppIdentityService.sameApp(item.appId, appId));
-        if (remaining.length === items.length || !ConfigService.setDockItems(remaining))
+        if (remaining.length === items.length)
+            return;
+        // Unpinning can leave a separator at an end or against another
+        // separator. Drop those from storage; the display filter alone would
+        // hide them and make a later removal look like a no-op.
+        const compacted = DockItems.compactDockItems(remaining);
+        if (!ConfigService.setDockItems(compacted))
             return;
         ConfigService.scheduleSave();
         svc._refreshPresentation();
@@ -578,11 +584,27 @@ QtObject {
         return visibleIndex
     }
 
+    function _separatorAppVisible(dockItem) {
+        if (ConfigService.windowGrouping === "grouped")
+            return true
+        const identity = AppIdentityService.resolve(dockItem.appId)
+        return WindowService.windowsForApp(identity.desktopId).length === 0
+    }
+
+    function canAddSeparatorAfter(appId) {
+        const identity = AppIdentityService.resolve(appId)
+        return DockItems.canAddSeparatorAfter(
+            ConfigService.dockItems || [], identity.desktopId,
+            AppIdentityService.sameApp,
+            function(item) { return svc._separatorAppVisible(item) })
+    }
+
     function addSeparatorAfter(appId) {
         const identity = AppIdentityService.resolve(appId)
         const next = DockItems.addSeparatorAfter(
             ConfigService.dockItems || [], identity.desktopId,
-            DockItems.createSeparatorId(), AppIdentityService.sameApp)
+            DockItems.createSeparatorId(), AppIdentityService.sameApp,
+            function(item) { return svc._separatorAppVisible(item) })
         if (!next || !ConfigService.setDockItems(next))
             return false
         ConfigService.scheduleSave()

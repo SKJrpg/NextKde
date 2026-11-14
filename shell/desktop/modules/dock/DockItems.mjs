@@ -124,8 +124,29 @@ export function visibleDockItems(items, isAppVisible = () => true) {
     return collapsed.slice(start, end)
 }
 
-export function addSeparatorAfter(items, appId, id, sameApp = (left, right) => left === right) {
+// True only when the next *visible* pinned item is an application. A last
+// icon, or one that already has a separator on its right, must not gain
+// another separator that the display filter would hide.
+export function canAddSeparatorAfter(items, appId, sameApp = (left, right) => left === right, isAppVisible = () => true) {
+    const visible = visibleDockItems(items, isAppVisible)
+    let index = -1
+    for (let i = 0; i < visible.length; i++) {
+        const item = visible[i]
+        if (item.type === "app" && sameApp(item.appId, appId)) {
+            index = i
+            break
+        }
+    }
+    if (index < 0)
+        return false
+    const next = visible[index + 1]
+    return !!(next && next.type === "app")
+}
+
+export function addSeparatorAfter(items, appId, id, sameApp = (left, right) => left === right, isAppVisible = () => true) {
     if (typeof id !== "string" || id.length === 0)
+        return null
+    if (!canAddSeparatorAfter(items, appId, sameApp, isAppVisible))
         return null
     const list = asArray(items).slice()
     let index = -1
@@ -139,7 +160,32 @@ export function addSeparatorAfter(items, appId, id, sameApp = (left, right) => l
     if (index < 0)
         return null
     list.splice(index + 1, 0, { type: "separator", id: id })
-    return list
+    return compactDockItems(list)
+}
+
+// Drop separators that are not strictly between two stored apps. Explicit
+// reorder and unpin use this so a separator dragged to either end, or left
+// beside another separator, is removed from the saved list. The display
+// filter still does not write on its own.
+export function compactDockItems(items) {
+    const collapsed = []
+    const list = asArray(items)
+    for (let i = 0; i < list.length; i++) {
+        const item = list[i]
+        if (!item)
+            continue
+        if (item.type === "separator" && collapsed.length > 0
+                && collapsed[collapsed.length - 1].type === "separator")
+            continue
+        collapsed.push(item)
+    }
+    let start = 0
+    let end = collapsed.length
+    while (start < end && collapsed[start].type === "separator")
+        start++
+    while (end > start && collapsed[end - 1].type === "separator")
+        end--
+    return collapsed.slice(start, end)
 }
 
 export function removeSeparator(items, id) {

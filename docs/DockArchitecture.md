@@ -535,8 +535,12 @@ normalization still drops unknown types, keeps separators, and never removes
 a pinned app to accommodate them. `DockModelService` hides separators that
 lead or trail the pinned run, adjacent duplicates, and separators left
 without a neighbouring pinned app (including after a separate-mode app moves
-into the window section). That filter does not rewrite the saved list. The
-separator reuses `DockDivider` — theme hairline, rotated with `contentRow`,
+into the window section). Simply reading the model does not rewrite the saved
+list. "Add separator to the right" is offered only when the next visible pinned
+item is an application, so the last icon and an icon that already has a
+separator on its right do not store a hidden one. Reorder and unpin then
+compact storage: a separator left at either end, or squeezed against another
+separator, is deleted rather than kept invisible. The separator reuses `DockDivider` — theme hairline, rotated with `contentRow`,
 so a side dock draws it horizontally. Its slot is one icon spacing plus half
 a spacing on each side; `computeLayout` reserves that width plus the row gap.
 Separators reorder with pinned icons and are removed when dragged out past
