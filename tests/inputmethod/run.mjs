@@ -12,7 +12,16 @@ try {
     writeFileSync(join(directory, "InputMethodPresentation.qml"),
         readFileSync(new URL("inputmethod/InputMethodPresentation.qml", source), "utf8")
             .replace("import qs.desktop.modules.common", 'import "."'));
-    copyFileSync(new URL("common/PopupMotion.qml", source), join(directory, "PopupMotion.qml"));
+    // PopupMotion resolves its spring from `Kos/Ui/foundation`. The temp tree
+    // has no shell hierarchy, so copy the two components and the physics
+    // module beside it and import them from the same directory instead.
+    for (const name of ["SpringMotion.qml", "MotionSpring.qml", "MotionSpring.mjs"])
+        copyFileSync(new URL(`../../shell/Kos/Ui/foundation/${name}`, import.meta.url),
+            join(directory, name));
+    writeFileSync(join(directory, "PopupMotion.qml"),
+        readFileSync(new URL("common/PopupMotion.qml", source), "utf8")
+            .replace('import "../../../Kos/Ui/foundation" as Foundation',
+                'import "." as Foundation'));
     copyFileSync(new URL("inputmethod/InputMethodPlacement.mjs", source), join(directory, "InputMethodPlacement.mjs"));
     writeFileSync(join(directory, "InputMethodService.qml"),
         readFileSync(new URL("inputmethod/InputMethodService.qml", source), "utf8")
@@ -54,7 +63,14 @@ QtObject {
     writeFileSync(join(directory, "qmldir"), readFileSync(join(directory, "qmldir"), "utf8")
         + "singleton ScreenLifecycle 1.0 ScreenLifecycle.qml\n"
         + "singleton InputMethodConfigService 1.0 InputMethodConfigService.qml\n"
-        + "singleton JsonConfigStore 1.0 JsonConfigStore.qml\n");
+        + "singleton JsonConfigStore 1.0 JsonConfigStore.qml\n"
+        + "singleton AppearanceConfigService 1.0 AppearanceConfigService.qml\n");
+    writeFileSync(join(directory, "AppearanceConfigService.qml"), `pragma Singleton
+import QtQuick
+QtObject {
+    property bool reduceMotion: false
+}
+`);
     writeFileSync(join(directory, "ScreenLifecycle.qml"), `pragma Singleton
 import QtQuick
 QtObject {
