@@ -233,14 +233,4 @@ export function moveDockItem(items, sourceType, sourceKey, targetIndex) {
     return list
 }
 
-// A separator leaves the dock when its centre crosses the resting thickness.
-// Icon reordering stays on the along-dock axis and does not use this.
-export function separatorDragReleasedOutside(crossAxisOffset, dockThickness) {
-    const offset = Number(crossAxisOffset)
-    const thickness = Number(dockThickness)
-    if (!Number.isFinite(offset) || !Number.isFinite(thickness) || thickness <= 0)
-        return false
-    return Math.abs(offset) > thickness / 2
-}
-
 export { DOCK_CONFIG_VERSION }

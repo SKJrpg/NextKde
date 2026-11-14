@@ -195,12 +195,17 @@ export function computeLayout(
     }
 }
 
-// User separator slot: the icon gap, plus half a gap on each side.
+// User separator slot: the icon gap, plus half a gap on each side, with a
+// pixel floor so the 2px hairline keeps a usable grab area when the adaptive
+// layout shrinks the Dock. The floor is applied in DockContainer.restingDockWidth
+// as well, because computeLayout reserves this slot in icon units.
+const MIN_SEPARATOR_SLOT = 12
+
 export function separatorSlotWidth(itemSpacing) {
     const spacing = Number(itemSpacing)
     if (!Number.isFinite(spacing) || spacing <= 0)
         return 0
-    return spacing + spacing / 2 + spacing / 2
+    return Math.max(MIN_SEPARATOR_SLOT, spacing + spacing / 2 + spacing / 2)
 }
 
-export { MIN_ICON_SIZE, MAX_HEIGHT_RATIO, MAX_WIDTH_RATIO }
+export { MIN_ICON_SIZE, MIN_SEPARATOR_SLOT, MAX_HEIGHT_RATIO, MAX_WIDTH_RATIO }

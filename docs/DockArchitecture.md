@@ -540,11 +540,15 @@ list. "Add separator to the right" is offered only when the next visible pinned
 item is an application, so the last icon and an icon that already has a
 separator on its right do not store a hidden one. Reorder and unpin then
 compact storage: a separator left at either end, or squeezed against another
-separator, is deleted rather than kept invisible. The separator reuses `DockDivider` — theme hairline, rotated with `contentRow`,
-so a side dock draws it horizontally. Its slot is one icon spacing plus half
-a spacing on each side; `computeLayout` reserves that width plus the row gap.
-Separators reorder with pinned icons and are removed when dragged out past
-half the dock thickness. They do not magnify, show a name, or take a highlight.
+separator, is deleted rather than kept invisible. The separator reuses
+`DockDivider` — theme hairline, rotated with `contentRow`, so a side dock
+draws it horizontally. Its slot is one icon spacing plus half a spacing on
+each side, with a 12 px floor so the hairline keeps a usable grab area when
+the adaptive layout shrinks the Dock; `computeLayout` reserves that width
+plus the row gap. Separators reorder with pinned icons, strictly along the
+dock: perpendicular pointer travel is ignored and the slot stays inside the
+bar. They are removed only from their own menu. They do not magnify, show
+a name, or take a highlight.
 A pinned app's menu can add one to its right; a separator's menu only removes it.
 
 Schema 12 keeps one `hoverScale` setting: the hovered icon's peak scale

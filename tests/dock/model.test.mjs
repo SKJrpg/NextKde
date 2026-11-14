@@ -10,7 +10,7 @@ import { computeLayout, separatorSlotWidth } from "../../shell/desktop/modules/d
 import { layout } from "../../shell/desktop/modules/dock/DockMagnification.mjs";
 import {
     DOCK_CONFIG_VERSION, addSeparatorAfter, canAddSeparatorAfter, compactDockItems,
-    moveDockItem, normalizeDockItems, removeSeparator, separatorDragReleasedOutside,
+    moveDockItem, normalizeDockItems, removeSeparator,
     visibleDockItems,
 } from "../../shell/desktop/modules/dock/DockItems.mjs";
 import { catalog as zhCatalog } from "../../shared/qml/i18n/ZhCatalog.mjs";
@@ -611,7 +611,8 @@ test("dock separators", () => {
     assert.match(model, /visibleDockItems/);
     assert.match(model, /function addSeparatorAfter/);
     assert.match(model, /function removeSeparator/);
-    assert.match(container, /separatorDragReleasedOutside/);
+    assert.match(container, /function clampDragX/);
+    assert.doesNotMatch(container, /yAxis\.enabled:\s*pinnedItemLoader\.isSeparator/);
     assert.match(container, /I18n\.tr\("Remove separator"\)/);
     assert.match(icon, /I18n\.tr\("Add separator to the right"\)/);
     assert.equal(zhCatalog["Add separator to the right"], "在右侧添加分隔线");
@@ -728,11 +729,11 @@ test("dock separators", () => {
     assert.equal(moveDockItem(added, "separator", "missing", 0), null);
     assert.equal(moveDockItem(added, "separator", "s", 1), null);
 
-    assert.equal(separatorDragReleasedOutside(31, 60), true);
-    assert.equal(separatorDragReleasedOutside(-31, 60), true);
-    assert.equal(separatorDragReleasedOutside(30, 60), false);
-    assert.equal(separatorDragReleasedOutside(NaN, 60), false);
-    assert.equal(separatorDragReleasedOutside(10, 0), false);
+    // Separators are dragged strictly along the dock and can only be removed
+    // from their own menu.
+    assert.equal(separatorSlotWidth(4), 12);
+    assert.equal(separatorSlotWidth(10), 20);
+    assert.equal(separatorSlotWidth(0), 0);
 
     // Layout width. Two separators add a row gap plus a 2×spacing slot each.
     const proportions = { spacing: 0.1, vpad: 0.2, hpad: 0.4, divmargin: 0.2 };
@@ -743,7 +744,8 @@ test("dock separators", () => {
     const perSeparator = plain.iconSize * 0.1 * 3;
     assert.ok(Math.abs(withSeps.dockWidth - plain.dockWidth - perSeparator * 2) < 1e-6,
         `width delta ${withSeps.dockWidth - plain.dockWidth} != ${perSeparator * 2}`);
-    assert.equal(separatorSlotWidth(plain.itemSpacing), plain.itemSpacing * 2);
+    assert.equal(separatorSlotWidth(plain.itemSpacing),
+        Math.max(12, plain.itemSpacing * 2));
     assert.equal(separatorSlotWidth(0), 0);
     const crowded = computeLayout(60, 30, 30, true, 800, proportions, 0.98, 4, false, 8);
     const crowdedPlain = computeLayout(60, 30, 30, true, 800, proportions);

@@ -2,7 +2,6 @@ import QtQuick
 import Quickshell
 import "../../../shared/qml/i18n"
 import "./AdaptiveMath.mjs" as AdaptiveMath
-import "DockItems.mjs" as DockItems
 import qs.desktop
 import qs.desktop.modules.applauncher
 import qs.desktop.modules.common
@@ -201,7 +200,11 @@ Item {
     readonly property int restingDockWidth: Math.round(_layout.dockWidth
         + accessoryContentWidth
         + accessoryDividerCount * (2 + dividerMargin * 2)
-        + accessoryGapCount * itemSpacing)
+        + accessoryGapCount * itemSpacing
+        // The separator slot has a pixel floor; computeLayout reserves it in
+        // icon units, so add the difference the floor introduces.
+        + separatorCount * Math.max(0, AdaptiveMath.separatorSlotWidth(itemSpacing)
+            - 2 * proportions.spacing * iconSize))
     readonly property real naturalDockWidth: restingDockWidth + hoverSpreadTotal
     // The resting counterpart of computedDockWidth (no hover spread).
     readonly property int restingComputedWidth: fillsAvailableLength
@@ -960,29 +963,34 @@ Item {
                 property int pinnedIndex: index
                 property bool dragged: false
                 property real lastDragOffsetX: 0
-                property real lastDragOffsetY: 0
                 // The DragHandler clears translation as soon as the pointer is
                 // released. Keep a visual anchor for one layout frame so the
                 // source never flashes back to its old slot before the reordered
                 // Repeater geometry is ready.
                 property bool settling: false
                 property real releaseCenterX: 0
+                // Separators move strictly along the dock. Clamp the drag so
+                // the slot cannot leave the bar's length; perpendicular travel
+                // is ignored (the y axis is disabled on separators).
+                function clampDragX(dx) {
+                    return Math.max(-pinnedItemLoader.x,
+                        Math.min(contentRow.width - pinnedItemLoader.width
+                            - pinnedItemLoader.x, dx))
+                }
                 readonly property real dragPointerX: reorderDrag.active
                     ? pinnedItemLoader.x + pinnedItemLoader.width / 2
-                      + reorderDrag.translation.x : -1
+                      + pinnedItemLoader.clampDragX(reorderDrag.translation.x) : -1
                 // Keep the Row in charge of geometry while the visual item
                 // follows the pointer above it. This leaves a clear gap at
                 // the original position and avoids fighting Row's layout.
                 property real dragOffsetX: {
                     if (reorderDrag.active)
-                        return reorderDrag.translation.x
+                        return pinnedItemLoader.clampDragX(reorderDrag.translation.x)
                     if (settling)
                         return releaseCenterX - (pinnedItemLoader.x
                             + pinnedItemLoader.width / 2)
                     return 0
                 }
-                readonly property real dragOffsetY: reorderDrag.active
-                    ? reorderDrag.translation.y : 0
                 readonly property real reorderOffsetX: {
                     const source = container.draggedPinnedLoader
                     const destination = container.dragInsertIndex
@@ -1023,7 +1031,6 @@ Item {
                     x: pinnedItemLoader.visualOffsetX
                         + (pinnedItemLoader.isSeparator
                             ? container.spreadFor(pinnedItemLoader) : 0)
-                    y: pinnedItemLoader.dragOffsetY
                 }
                 Behavior on visualOffsetX {
                     // The dragged source follows immediately. Neighbours ease
@@ -1046,12 +1053,10 @@ Item {
                     id: reorderDrag
                     target: null
                     acceptedButtons: Qt.LeftButton
+                    // Strictly along the dock: separators follow the same axis
+                    // as icons, and the clamp below keeps the slot inside the
+                    // bar. Removal is only from the separator's own menu.
                     xAxis.enabled: true
-                    // Icons stay on the dock axis. A separator may also leave
-                    // across the thickness; releasing there removes it.
-                    // contentRow's rotation makes this local axis the
-                    // screen-perpendicular direction on side docks too.
-                    yAxis.enabled: pinnedItemLoader.isSeparator
                     onActiveChanged: {
                         if (active) {
                             // A deliberate drag is an alternate entry point
@@ -1063,26 +1068,11 @@ Item {
                             pinnedItemLoader.dragged = true
                             pinnedItemLoader.settling = false
                             pinnedItemLoader.lastDragOffsetX = 0
-                            pinnedItemLoader.lastDragOffsetY = 0
                             container.draggedPinnedLoader = pinnedItemLoader
                             return
                         }
                         if (!pinnedItemLoader.dragged)
                             return
-
-                        if (pinnedItemLoader.isSeparator
-                                && DockItems.separatorDragReleasedOutside(
-                                    pinnedItemLoader.lastDragOffsetY,
-                                    container.computedDockHeight)) {
-                            const removedId = pinnedItemLoader.itemData.id
-                            pinnedItemLoader.settling = false
-                            pinnedItemLoader.dragged = false
-                            if (container.draggedPinnedLoader === pinnedItemLoader)
-                                container.draggedPinnedLoader = null
-                            container.editMode = false
-                            DockModelService.removeSeparator(removedId)
-                            return
-                        }
 
                         // `translation` is measured from this Loader's start
                         // position, so it gives the actual visual centre in
@@ -1121,10 +1111,9 @@ Item {
                     // before onActiveChanged(false) runs. Keep the final
                     // non-zero value for the release transaction above.
                     onTranslationChanged: {
-                        if (active) {
-                            pinnedItemLoader.lastDragOffsetX = translation.x
-                            pinnedItemLoader.lastDragOffsetY = translation.y
-                        }
+                        if (active)
+                            pinnedItemLoader.lastDragOffsetX =
+                                pinnedItemLoader.clampDragX(translation.x)
                     }
                 }
 
